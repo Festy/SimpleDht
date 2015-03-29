@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Formatter;
+import java.util.HashMap;
 
 public class SimpleDhtProvider extends ContentProvider {
 
@@ -36,6 +37,7 @@ public class SimpleDhtProvider extends ContentProvider {
     String successor=null;
     ArrayList<String> nodeList;
     private static int SERVER_PORT = 10000;
+    HashMap<String ,String > hashMap;
 
 /* Logic
 
@@ -105,6 +107,18 @@ public class SimpleDhtProvider extends ContentProvider {
             e.printStackTrace();
         }
 
+        // Add all reverse lookup entries
+        hashMap = new HashMap<>(5);
+        try{
+            hashMap.put(genHash("5554"),"5554");
+            hashMap.put(genHash("5556"),"5556");
+            hashMap.put(genHash("5558"),"5558");
+            hashMap.put(genHash("5560"),"5560");
+            hashMap.put(genHash("5562"),"5562");
+        }
+        catch (NoSuchAlgorithmException e){
+            e.printStackTrace();
+        }
         // Create Database
         Context context = getContext();
         DBHelper dbHelper = new DBHelper(context);
@@ -133,8 +147,13 @@ public class SimpleDhtProvider extends ContentProvider {
             nodeList = new ArrayList<String>();
             try
             {
-                Log.i(TAG, "Node Joined: "+myPort);
-                nodeList.add(genHash(myPort));
+                Log.i(TAG, "Node Joined: 11108");
+                String hash = genHash("5554");
+                nodeList.add(hash);
+
+                // Point to yourself!
+                predecessor = hash;
+                successor = hash;
             }
             catch (NoSuchAlgorithmException e){
                 e.printStackTrace();
@@ -194,7 +213,7 @@ public class SimpleDhtProvider extends ContentProvider {
             ObjectOutputStream objectOutputStream;
             BufferedOutputStream bufferedOutputStream;
             Socket socket = null;
-            if (msg.getType().equals(Message.TYPE.JOIN)){
+            if (msg.getType().equals(Message.TYPE.JOIN) || msg.getType().equals(Message.TYPE.UPDATE_LINKS)){
                try{
                    socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(msg.getRemotePort()));
                    bufferedOutputStream = new BufferedOutputStream(socket.getOutputStream());
@@ -211,6 +230,8 @@ public class SimpleDhtProvider extends ContentProvider {
                     e.printStackTrace();
                 }
             }
+
+
             return null;
         }
     }
@@ -253,14 +274,111 @@ public class SimpleDhtProvider extends ContentProvider {
             switch (type){
                 case JOIN:
                     try {
-                        nodeList.add(genHash(Integer.toString(Integer.parseInt(m.getSenderPort()) / 2)));
+                        String hash = genHash(Integer.toString(Integer.parseInt(m.getSenderPort()) / 2));
+                        nodeList.add(hash);
                         nodeList = sortNodeList(nodeList);
                         Log.i(TAG, "Node Joined: "+m.getSenderPort());
+
+                        // Send 3 messages.
+
+        // 1. Tell Original Sender it's pre and successor.
+                        Message m1 = new Message();
+                        int index = nodeList.indexOf(hash);
+
+                        // If it's the last node
+                        if(index==nodeList.size()-1){
+                            m1.setPre(nodeList.get(index-1));
+                            m1.setSucc(nodeList.get(0));
+                        }
+
+                        // If it's first node
+                        else if (index==0){
+                            m1.setPre(nodeList.get(nodeList.size()-1));
+                            m1.setSucc(nodeList.get(1));
+                        }
+
+                        else{
+                            m1.setPre(nodeList.get(index-1));
+                            m1.setSucc(nodeList.get(index+1));
+                        }
+
+                        m1.setRemotePort(m.getSenderPort());
+                        m1.setType(Message.TYPE.UPDATE_LINKS);
+//                        Log.i(TAG, "Sending UPDATE_LINKS to"+m1.getRemotePort());
+
+
+        // 2. Find the predecessor and successor port numbers from the hashmap and send them the message to update their links
+                        int indexPre = nodeList.indexOf(m1.getPre());
+                        int indexSucc = nodeList.indexOf(m1.getSucc());
+
+                        Message m2 = new Message();
+                        int index2 = indexPre;
+
+                        // If it's the last node
+                        if(index2==nodeList.size()-1){
+                            m2.setPre(nodeList.get(index2-1));
+                            m2.setSucc(nodeList.get(0));
+                        }
+
+                        // If it's first node
+                        else if (index2==0){
+                            m2.setPre(nodeList.get(nodeList.size()-1));
+                            m2.setSucc(nodeList.get(1));
+                        }
+
+                        else{
+                            m2.setPre(nodeList.get(index2-1));
+                            m2.setSucc(nodeList.get(index2+1));
+                        }
+
+                        m2.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(nodeList.get(index2)))*2));
+                        m2.setType(Message.TYPE.UPDATE_LINKS);
+//                        Log.i(TAG, "Sending UPDATE_LINKS to"+m2.getRemotePort());
+
+
+
+
+                        int index3 = indexSucc;
+                        Message m3 = new Message();
+
+                        // If it's the last node
+                        if(index3==nodeList.size()-1){
+                            m3.setPre(nodeList.get(index3-1));
+                            m3.setSucc(nodeList.get(0));
+                        }
+
+                        // If it's first node
+                        else if (index3==0){
+                            m3.setPre(nodeList.get(nodeList.size()-1));
+                            m3.setSucc(nodeList.get(1));
+                        }
+
+                        else{
+                            m3.setPre(nodeList.get(index3-1));
+                            m3.setSucc(nodeList.get(index3+1));
+                        }
+
+                        m3.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(nodeList.get(index3)))*2));
+//                        Log.i(TAG, "Sending UPDATE_LINKS to"+m3.getRemotePort());
+                        m3.setType(Message.TYPE.UPDATE_LINKS);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m1, null);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m2, null);
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m3, null);
+
 
                     } catch (NoSuchAlgorithmException e) {
                         e.printStackTrace();
                     }
                     break;
+
+                case UPDATE_LINKS:
+                    predecessor = m.getPre();
+                    successor = m.getSucc();
+
+                    Log.i(TAG, "Update: Predecessor = "+hashMap.get(predecessor));
+                    Log.i(TAG, "Update: Successor = "+hashMap.get(successor));
+                    break;
+
             }
 
         }

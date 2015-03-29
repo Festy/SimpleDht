@@ -8,13 +8,15 @@ import java.io.Serializable;
 
 public class Message implements Serializable{
     public enum TYPE{
-        JOIN, ADD, DELETE_ONE, DELETE_ALL, GET_ONE, GET_ALL;
+        JOIN, ADD, DELETE_ONE, DELETE_ALL, GET_ONE, GET_ALL, UPDATE_LINKS ;
     }
 //    private String sender;
     private String senderPort;
     private String message;
     private String remotePort;
     private TYPE type;
+    private String pre;
+    private String succ;
 
 //    public void setSender(String sender) {
 //        this.sender = sender;
@@ -54,5 +56,21 @@ public class Message implements Serializable{
 
     public TYPE getType() {
         return type;
+    }
+
+    public void setPre(String pre) {
+        this.pre = pre;
+    }
+
+    public void setSucc(String succ) {
+        this.succ = succ;
+    }
+
+    public String getPre() {
+        return pre;
+    }
+
+    public String getSucc() {
+        return succ;
     }
 }
