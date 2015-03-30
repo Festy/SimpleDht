@@ -6,6 +6,7 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.database.sqlite.SQLiteQueryBuilder;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.telephony.TelephonyManager;
@@ -38,7 +39,7 @@ public class SimpleDhtProvider extends ContentProvider {
     ArrayList<String> nodeList;
     private static int SERVER_PORT = 10000;
     HashMap<String ,String > hashMap;
-
+    public Uri mUri;
 /* Logic
 
 *   First 5554 will start.
@@ -87,6 +88,78 @@ public class SimpleDhtProvider extends ContentProvider {
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         // TODO Auto-generated method stub
+        try {
+            String keyHash = genHash((String)values.get("key"));
+            String value = (String)values.get("value");
+            String key = (String)values.get("key");
+
+            // If you are not the first node, then for all the rest nodes, predecessor will have smaller than own node's hash. (as nodes are in increasing order)
+            // 4 (pre) - 5 (own) - 6 (succ) : here pre < Own
+            // If you are first node, then pre and post are > own
+            // This is how we will identify the first node, which requires special case to be handled
+
+            // If there is only one node
+            if(ownHash.equals(predecessor)){
+                // Store in own DB
+                Log.i(TAG, "Only one node is live. Storing in own");
+                long rowID = db.insertWithOnConflict(TABLE_NAME,"",values,SQLiteDatabase.CONFLICT_REPLACE);
+            }
+
+            // If there are many nodes and this node is an internal node
+            else if(predecessor.compareTo(ownHash)<0){
+                if(keyHash.compareTo(ownHash)<=0 && keyHash.compareTo(predecessor)>0){
+                    // Keep it with you
+                    long rowID = db.insertWithOnConflict(TABLE_NAME,"",values,SQLiteDatabase.CONFLICT_REPLACE);
+                    Log.i(TAG, "Storing in own DB");
+
+
+                }
+                else{
+                    // Forward it to the successor
+
+                    Message m = new Message();
+                    m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                    m.setKeyHash(keyHash);
+                    m.setKey((String)values.get("key"));
+                    m.setValue((String)values.get("value"));
+                    m.setType(Message.TYPE.ADD);
+//                    m.setUri(mUri);
+
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                    Log.i(TAG, "Forwarded to the successor: "+ successor+ " keyHash: "+keyHash);
+                }
+
+            }
+            else if(predecessor.compareTo(ownHash)>0){
+                // Then you are the first node
+                // If the message is bigger than the predecessor, then you will store that in you. Else forward it to the successor.
+                if(keyHash.compareTo(predecessor)>0 || keyHash.compareTo(ownHash)<=0){
+                    // Keep it in you
+                    Log.i(TAG, "Storing in own DB");
+                    long rowID = db.insertWithOnConflict(TABLE_NAME,"",values,SQLiteDatabase.CONFLICT_REPLACE);
+                }
+                else{
+                    // Forward it to the successor
+                    Message m = new Message();
+                    m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                    m.setKeyHash(keyHash);
+                    m.setKey((String) values.get("key"));
+                    m.setValue((String) values.get("value"));
+                    m.setType(Message.TYPE.ADD);
+//                    m.setUri(uri);
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                    Log.i(TAG, "This is First Node. Forwarded to the successor: "+ successor+ " keyHash: "+keyHash);
+                }
+            }
+            else{
+                Log.e(TAG, "Unhandled Case?");
+            }
+
+
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+
         return null;
     }
 
@@ -100,13 +173,20 @@ public class SimpleDhtProvider extends ContentProvider {
         myPort = String.valueOf((Integer.parseInt(portStr)*2));
         Log.i(TAG, "Node "+myPort+" created.");
         try{
-            ownHash = genHash(myPort);
+            ownHash = genHash(Integer.toString(Integer.parseInt(myPort)/2));
+            predecessor = ownHash;
+            successor = ownHash;
             Log.i(TAG, "Own Port: "+myPort);
         }
         catch (NoSuchAlgorithmException e){
             e.printStackTrace();
         }
-
+        mUri = buildUri("content", "edu.buffalo.cse.cse486586.simpledht.provider");
+//        try {
+//            Log.i(TAG, genHash("Rod3U5krEsFUbfi76sdI66SxDvFLEIut"));
+//        } catch (NoSuchAlgorithmException e) {
+//            e.printStackTrace();
+//        }
         // Add all reverse lookup entries
         hashMap = new HashMap<>(5);
         try{
@@ -115,7 +195,9 @@ public class SimpleDhtProvider extends ContentProvider {
             hashMap.put(genHash("5558"),"5558");
             hashMap.put(genHash("5560"),"5560");
             hashMap.put(genHash("5562"),"5562");
+            System.out.println(hashMap);
         }
+
         catch (NoSuchAlgorithmException e){
             e.printStackTrace();
         }
@@ -150,10 +232,6 @@ public class SimpleDhtProvider extends ContentProvider {
                 Log.i(TAG, "Node Joined: 11108");
                 String hash = genHash("5554");
                 nodeList.add(hash);
-
-                // Point to yourself!
-                predecessor = hash;
-                successor = hash;
             }
             catch (NoSuchAlgorithmException e){
                 e.printStackTrace();
@@ -186,8 +264,41 @@ public class SimpleDhtProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
-        // TODO Auto-generated method stub
-        return null;
+        SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
+        qb.setTables(TABLE_NAME);
+        String queryKey = selection;
+        Cursor cursor = null;
+        switch (queryKey){
+            case "\"*\"":
+
+                // If you are the only node alive, no need to send any msg to any node
+                if(predecessor.compareTo(ownHash)==0){
+                    cursor = db.rawQuery("SELECT * FROM mytable",null);
+                    Log.v("query", selection);
+                }
+                else{
+                    // Send a message to the next one requesting to get all messages from their AVDs.
+                    // Collect all and return.
+                    //TODO
+
+                }
+
+                break;
+
+            case "\"@\"":
+                // retrieve all from this machine
+                cursor = db.rawQuery("SELECT * FROM mytable",null);
+                Log.v("query", selection);
+                break;
+
+            default:
+                // If it's in you, retrieve it, or forward the query message, wait for reply and give the result.
+                // TODO
+                cursor = db.rawQuery("SELECT * FROM mytable WHERE key = ?",new String[]{selection});
+                Log.v("query", selection);
+        }
+
+        return cursor;
     }
 
     @Override
@@ -206,6 +317,13 @@ public class SimpleDhtProvider extends ContentProvider {
         return formatter.toString();
     }
 
+    private Uri buildUri(String scheme, String authority) {
+        Uri.Builder uriBuilder = new Uri.Builder();
+        uriBuilder.authority(authority);
+        uriBuilder.scheme(scheme);
+        return uriBuilder.build();
+    }
+
     private class ClientTask extends AsyncTask<Message, Void, Void>{
         @Override
         protected Void doInBackground(Message... msgs) {
@@ -213,7 +331,7 @@ public class SimpleDhtProvider extends ContentProvider {
             ObjectOutputStream objectOutputStream;
             BufferedOutputStream bufferedOutputStream;
             Socket socket = null;
-            if (msg.getType().equals(Message.TYPE.JOIN) || msg.getType().equals(Message.TYPE.UPDATE_LINKS)){
+            if (msg.getType().equals(Message.TYPE.JOIN) || msg.getType().equals(Message.TYPE.UPDATE_LINKS) || msg.getType().equals(Message.TYPE.ADD)){
                try{
                    socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(msg.getRemotePort()));
                    bufferedOutputStream = new BufferedOutputStream(socket.getOutputStream());
@@ -377,6 +495,11 @@ public class SimpleDhtProvider extends ContentProvider {
 
                     Log.i(TAG, "Update: Predecessor = "+hashMap.get(predecessor));
                     Log.i(TAG, "Update: Successor = "+hashMap.get(successor));
+                    break;
+                case ADD:
+
+                    insert(mUri, m.getContentValue());
+
                     break;
 
             }

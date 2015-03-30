@@ -1,5 +1,7 @@
 package edu.buffalo.cse.cse486586.simpledht;
 
+import android.content.ContentValues;
+
 import java.io.Serializable;
 
 /**
@@ -17,6 +19,10 @@ public class Message implements Serializable{
     private TYPE type;
     private String pre;
     private String succ;
+    private String keyHash;
+    private String key;
+    private String value;
+//    private Uri uri;
 
 //    public void setSender(String sender) {
 //        this.sender = sender;
@@ -72,5 +78,44 @@ public class Message implements Serializable{
 
     public String getSucc() {
         return succ;
+    }
+
+    public void setKeyHash(String keyHash) {
+        this.keyHash = keyHash;
+    }
+
+    public String getKeyHash() {
+        return keyHash;
+    }
+
+    public void setKey(String key) {
+        this.key = key;
+    }
+
+    public void setValue(String value) {
+        this.value = value;
+    }
+
+    public String getKey() {
+        return key;
+    }
+
+    public String getValue() {
+        return value;
+    }
+
+//    public void setUri(Uri uri) {
+//        this.uri = uri;
+//    }
+//
+//    public Uri getUri() {
+//        return uri;
+//    }
+
+    public ContentValues getContentValue(){
+        ContentValues cv = new ContentValues();
+        cv.put("key",getKey());
+        cv.put("value",getValue());
+        return cv;
     }
 }
