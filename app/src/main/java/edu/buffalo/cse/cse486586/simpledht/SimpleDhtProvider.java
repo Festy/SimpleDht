@@ -4,6 +4,7 @@ import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.database.sqlite.SQLiteQueryBuilder;
@@ -28,6 +29,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Formatter;
 import java.util.HashMap;
+import java.util.concurrent.ExecutionException;
 
 public class SimpleDhtProvider extends ContentProvider {
 
@@ -40,6 +42,10 @@ public class SimpleDhtProvider extends ContentProvider {
     private static int SERVER_PORT = 10000;
     HashMap<String ,String > hashMap;
     public Uri mUri;
+    Object oneReplyLock;
+    Object allReplyLock;
+    HashMap<String,String > result;
+    Boolean ownQuery = true;
 /* Logic
 
 *   First 5554 will start.
@@ -172,8 +178,11 @@ public class SimpleDhtProvider extends ContentProvider {
         String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
         myPort = String.valueOf((Integer.parseInt(portStr)*2));
         Log.i(TAG, "Node "+myPort+" created.");
+
+        oneReplyLock  = new Object();
+        allReplyLock = new Object();
         try{
-            ownHash = genHash(Integer.toString(Integer.parseInt(myPort)/2));
+            ownHash = genHash(Integer.toString(Integer.parseInt(myPort) / 2));
             predecessor = ownHash;
             successor = ownHash;
             Log.i(TAG, "Own Port: "+myPort);
@@ -271,15 +280,19 @@ public class SimpleDhtProvider extends ContentProvider {
         switch (queryKey){
             case "\"*\"":
 
+                cursor = db.rawQuery("SELECT * FROM mytable",null);
+                Log.v("query", selection);
+
                 // If you are the only node alive, no need to send any msg to any node
-                if(predecessor.compareTo(ownHash)==0){
-                    cursor = db.rawQuery("SELECT * FROM mytable",null);
-                    Log.v("query", selection);
+                if(predecessor.compareTo(ownHash)==0)
+                {
+                    // No forwarding
                 }
                 else{
                     // Send a message to the next one requesting to get all messages from their AVDs.
                     // Collect all and return.
                     //TODO
+
 
                 }
 
@@ -295,7 +308,45 @@ public class SimpleDhtProvider extends ContentProvider {
                 // If it's in you, retrieve it, or forward the query message, wait for reply and give the result.
                 // TODO
                 cursor = db.rawQuery("SELECT * FROM mytable WHERE key = ?",new String[]{selection});
-                Log.v("query", selection);
+                Log.i(TAG,"Query Fired");
+                if(ownQuery==true){
+                    Log.i(TAG,"For me");
+                    // If the query was fired from your instance then only execute this code, else return the cursor as it is.
+//                    ownQuery = false;
+                    if(cursor==null || cursor.getCount()==0){
+                        Log.i(TAG, "Result not found.. Forwarding to successor.");
+                        Message m = new Message();
+                        m.setType(Message.TYPE.GET_ONE);
+                        m.setSenderPort(myPort);
+                        m.setKey(selection);
+                        m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                        try {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } catch (ExecutionException e) {
+                            e.printStackTrace();
+                        }
+
+                        synchronized(oneReplyLock){
+                            try {
+                                oneReplyLock.wait();
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                        String value = result.get(selection);
+                        String key = selection;
+                        MatrixCursor matrixCursor = new MatrixCursor(new String[]{"key","value"});
+                        matrixCursor.addRow(new Object[]{key,value});
+                        cursor = matrixCursor;
+                    }
+                    Log.v("query", selection);
+                }
+                else{
+                    Log.i(TAG,"For Sm1 Else");
+                }
+
         }
 
         return cursor;
@@ -331,7 +382,8 @@ public class SimpleDhtProvider extends ContentProvider {
             ObjectOutputStream objectOutputStream;
             BufferedOutputStream bufferedOutputStream;
             Socket socket = null;
-            if (msg.getType().equals(Message.TYPE.JOIN) || msg.getType().equals(Message.TYPE.UPDATE_LINKS) || msg.getType().equals(Message.TYPE.ADD)){
+//            if (msg.getType().equals(Message.TYPE.JOIN) || msg.getType().equals(Message.TYPE.UPDATE_LINKS) || msg.getType().equals(Message.TYPE.ADD) )
+            {
                try{
                    socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}), Integer.parseInt(msg.getRemotePort()));
                    bufferedOutputStream = new BufferedOutputStream(socket.getOutputStream());
@@ -340,6 +392,7 @@ public class SimpleDhtProvider extends ContentProvider {
                    objectOutputStream.flush();
                    objectOutputStream.close();
                    socket.close();
+                   if(msg.getType().equals(Message.TYPE.GET_ONE)) Log.i(TAG, "GET_ONE msg sent to "+ msg.getRemotePort());
                }
                catch (UnknownHostException e){
                    e.printStackTrace();
@@ -497,9 +550,43 @@ public class SimpleDhtProvider extends ContentProvider {
                     Log.i(TAG, "Update: Successor = "+hashMap.get(successor));
                     break;
                 case ADD:
-
                     insert(mUri, m.getContentValue());
-
+                    break;
+                case GET_ONE:
+                    Log.i(TAG, "GET_ONE msg received.");
+                    ownQuery = false;
+                    Cursor cursor = query(mUri, null, m.getKey(), null, null);
+                    if(cursor!=null && cursor.getCount()>0){
+                        // Then send the result to the original requester
+                        cursor.moveToFirst();
+                        String key = cursor.getString(0);
+                        String value = cursor.getString(1);
+                        Message msg = new Message();
+                        msg.setType(Message.TYPE.REPLY_ONE);
+                        HashMap<String, String> result = new HashMap<>();
+                        result.put(key,value);
+                        msg.setResult(result);
+                        msg.setRemotePort(m.getSenderPort());
+                        msg.setSenderPort(myPort);
+                        Log.i(TAG, "Found GET_ONE result in my DB. Sending Back!");
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, null);
+                    }
+                    else{
+                        // else forward it to your successor
+                        Log.i(TAG, "Didn't find the result.. Forwarding..");
+                        m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                    }
+                    ownQuery = true;
+                    break;
+                case REPLY_ONE:
+                    // If you receive this type of message, then you must have asked for it.
+                    // Get the messages and create a cursor object and return
+                    synchronized (oneReplyLock){
+                        result = m.getResult();
+                        Log.i(TAG, "Got Reply from "+ m.getSenderPort());
+                        oneReplyLock.notify();
+                    }
                     break;
 
             }

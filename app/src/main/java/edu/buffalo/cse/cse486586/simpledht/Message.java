@@ -3,6 +3,7 @@ package edu.buffalo.cse.cse486586.simpledht;
 import android.content.ContentValues;
 
 import java.io.Serializable;
+import java.util.HashMap;
 
 /**
  * Created by utsavpatel on 3/28/15.
@@ -10,7 +11,7 @@ import java.io.Serializable;
 
 public class Message implements Serializable{
     public enum TYPE{
-        JOIN, ADD, DELETE_ONE, DELETE_ALL, GET_ONE, GET_ALL, UPDATE_LINKS ;
+        JOIN, ADD, DELETE_ONE, DELETE_ALL, GET_ONE, GET_ALL, UPDATE_LINKS, REPLY_ONE, REPLY_ALL ;
     }
 //    private String sender;
     private String senderPort;
@@ -22,6 +23,7 @@ public class Message implements Serializable{
     private String keyHash;
     private String key;
     private String value;
+    private HashMap<String,String> result;
 //    private Uri uri;
 
 //    public void setSender(String sender) {
@@ -104,7 +106,14 @@ public class Message implements Serializable{
         return value;
     }
 
-//    public void setUri(Uri uri) {
+    public void setResult(HashMap<String, String> result) {
+        this.result = result;
+    }
+
+    public HashMap<String, String> getResult() {
+        return result;
+    }
+    //    public void setUri(Uri uri) {
 //        this.uri = uri;
 //    }
 //
