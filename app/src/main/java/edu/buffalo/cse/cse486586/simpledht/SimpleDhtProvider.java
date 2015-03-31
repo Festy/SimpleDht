@@ -89,13 +89,15 @@ public class SimpleDhtProvider extends ContentProvider {
         // TODO Auto-generated method stub
         switch (selection){
             case "\"@\"":
-               db.execSQL("DELETE FROM mytable");
+//               db.execSQL("DELETE FROM mytable");
+                db.delete(TABLE_NAME,null,null);
                 Log.i(TAG, "My own table is deleted");
                 break;
             case "\"*\"":
                 // Delete your own table and forward it to the next one
 
-                db.execSQL("DELETE from mytable");
+//                db.execSQL("DELETE from mytable");
+                db.delete(TABLE_NAME,null,null);
                 Log.i(TAG, "Deleted own table and forwarding to the next one");
                 Message m = new Message();
                 m.setType(Message.TYPE.DELETE_ALL);
@@ -117,7 +119,8 @@ public class SimpleDhtProvider extends ContentProvider {
                 Cursor cursor = db.rawQuery("SELECT * from mytable where key = ?",new String[]{selection});
                 if(cursor!=null && cursor.getCount()>0){
                     Log.i(TAG, "Found in my table.. Deleting it..");
-                    db.rawQuery("DELETE from mytable where key = ?",new String[]{selection});
+//                    db.rawQuery("DELETE from mytable where key = ?",new String[]{selection});
+                    db.delete(TABLE_NAME,"key='"+selection+"'",null);
                 }
                 else{
                     // Send it to your successor
@@ -771,11 +774,13 @@ public class SimpleDhtProvider extends ContentProvider {
                     Cursor cursor1 = db.rawQuery("SELECT * from mytable where key = ?",new String[]{m.getKey()});
                     if(cursor1!=null && cursor1.getCount()>0){
                         Log.i(TAG, "Found it. Deleting it..");
-                        db.rawQuery("DELETE from mytable where key=?",new String[]{m.getKey()});
+//                        db.rawQuery("DELETE from mytable where key=?",new String[]{m.getKey()});
+                        db.delete(TABLE_NAME,"key='"+m.getKey()+"'",null);
                         Log.i(TAG,"Deleted");
                     }
                     else{
                         // Forward it to the successor
+                        Log.i(TAG, "Didn't find- didn't delete, forwarding to my successor");
                         m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
                         try {
                             new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
@@ -792,7 +797,10 @@ public class SimpleDhtProvider extends ContentProvider {
                         Log.i(TAG, "Loop Complete. All db must have been deleted.");
                     }
                     else{
-                        db.execSQL("DELETE from mytable");
+
+//                        db.execSQL("DELETE from mytable");
+                        db.delete(TABLE_NAME,null,null);
+                        Log.i(TAG,"Deleted my table and forwarding to the successor");
                         m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
                         try {
                             new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
@@ -813,7 +821,7 @@ public class SimpleDhtProvider extends ContentProvider {
     static final String DB_NAME = "mydb";
     static final String TABLE_NAME = "mytable";
     static final String TABLE_NAME_2 = "nodetable";
-    static final int DB_VERSION = 1;
+    static final int DB_VERSION = 2;
     static final String CREATE_DB_TABLE = "CREATE TABLE " + TABLE_NAME+
             " ( key STRING PRIMARY KEY,"
             + " value STRING )";
