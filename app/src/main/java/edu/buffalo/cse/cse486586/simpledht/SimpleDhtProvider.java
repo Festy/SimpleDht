@@ -29,6 +29,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Formatter;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 public class SimpleDhtProvider extends ContentProvider {
@@ -44,8 +45,12 @@ public class SimpleDhtProvider extends ContentProvider {
     public Uri mUri;
     Object oneReplyLock;
     Object allReplyLock;
+    Object oneDeleteLock;
+    Object allDeleteLock;
     HashMap<String,String > result;
     Boolean ownQuery = true;
+    Boolean ownQueryAll = true;
+    HashMap<String, String > resultAll;
 /* Logic
 
 *   First 5554 will start.
@@ -82,6 +87,58 @@ public class SimpleDhtProvider extends ContentProvider {
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         // TODO Auto-generated method stub
+        switch (selection){
+            case "\"@\"":
+               db.execSQL("DELETE FROM mytable");
+                Log.i(TAG, "My own table is deleted");
+                break;
+            case "\"*\"":
+                // Delete your own table and forward it to the next one
+
+                db.execSQL("DELETE from mytable");
+                Log.i(TAG, "Deleted own table and forwarding to the next one");
+                Message m = new Message();
+                m.setType(Message.TYPE.DELETE_ALL);
+                m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                m.setSenderPort(myPort);
+                try {
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                } catch (ExecutionException e) {
+                    e.printStackTrace();
+                }
+
+                break;
+            default:
+                // Find a key and delete it
+
+                // 1. own table
+                Cursor cursor = db.rawQuery("SELECT * from mytable where key = ?",new String[]{selection});
+                if(cursor!=null && cursor.getCount()>0){
+                    Log.i(TAG, "Found in my table.. Deleting it..");
+                    db.rawQuery("DELETE from mytable where key = ?",new String[]{selection});
+                }
+                else{
+                    // Send it to your successor
+                    Log.i(TAG, "Didn't find. Sending DELETE_ONE to the successor. key: "+selection);
+                    Message m1 = new Message();
+                    m1.setType(Message.TYPE.DELETE_ONE);
+                    m1.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                    m1.setKey(selection);
+                    m1.setSenderPort(myPort);
+                    try {
+                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m1, null).get();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    } catch (ExecutionException e) {
+                        e.printStackTrace();
+                    }
+
+                }
+
+
+        }
         return 0;
     }
 
@@ -131,7 +188,7 @@ public class SimpleDhtProvider extends ContentProvider {
                     m.setType(Message.TYPE.ADD);
 //                    m.setUri(mUri);
 
-                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
                     Log.i(TAG, "Forwarded to the successor: "+ successor+ " keyHash: "+keyHash);
                 }
 
@@ -153,7 +210,7 @@ public class SimpleDhtProvider extends ContentProvider {
                     m.setValue((String) values.get("value"));
                     m.setType(Message.TYPE.ADD);
 //                    m.setUri(uri);
-                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
                     Log.i(TAG, "This is First Node. Forwarded to the successor: "+ successor+ " keyHash: "+keyHash);
                 }
             }
@@ -163,6 +220,10 @@ public class SimpleDhtProvider extends ContentProvider {
 
 
         } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
             e.printStackTrace();
         }
 
@@ -181,6 +242,8 @@ public class SimpleDhtProvider extends ContentProvider {
 
         oneReplyLock  = new Object();
         allReplyLock = new Object();
+        oneDeleteLock = new Object();
+        allDeleteLock = new Object();
         try{
             ownHash = genHash(Integer.toString(Integer.parseInt(myPort) / 2));
             predecessor = ownHash;
@@ -254,7 +317,13 @@ public class SimpleDhtProvider extends ContentProvider {
             m.setSenderPort(myPort);
             m.setRemotePort("11108");
             Log.i(TAG, "Sending JOIN message to 5554");
-            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+            try {
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (ExecutionException e) {
+                e.printStackTrace();
+            }
         }
         return true;
 
@@ -280,19 +349,73 @@ public class SimpleDhtProvider extends ContentProvider {
         switch (queryKey){
             case "\"*\"":
 
-                cursor = db.rawQuery("SELECT * FROM mytable",null);
-                Log.v("query", selection);
-
                 // If you are the only node alive, no need to send any msg to any node
                 if(predecessor.compareTo(ownHash)==0)
                 {
                     // No forwarding
+                    cursor = db.rawQuery("SELECT * FROM mytable",null);
+                    Log.v("query", selection);
+
                 }
                 else{
                     // Send a message to the next one requesting to get all messages from their AVDs.
-                    // Collect all and return.
-                    //TODO
+                    // Create a lock and wait till you get all reply
+                    // The message will collect reply from all and release the lock
 
+                    //TODO
+//                    if(ownQueryAll==true)
+                    Log.i(TAG, "Executing * query from me.");
+                    {
+                        cursor = db.rawQuery("SELECT * FROM mytable",null);
+
+                        HashMap<String, String> result = new HashMap<>();
+                        if(cursor!=null && cursor.getCount()>0){
+                            cursor.moveToFirst();
+                            for(int i = 0 ; i < cursor.getCount() ; i++){
+                                result.put(cursor.getString(0),cursor.getString(1));
+                                cursor.moveToNext();
+                            }
+                        }
+
+
+                        Message m = new Message();
+                        m.setResult(result);
+                        m.setType(Message.TYPE.GET_ALL);
+                        m.setSenderPort(myPort);
+                        m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+//                        try
+                        {
+                            Log.i(TAG, "Sending GET_ALL message to my successor "+m.getRemotePort());
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                        }
+//                        catch (InterruptedException e) {
+//                            e.printStackTrace();
+//                        } catch (ExecutionException e) {
+//                            e.printStackTrace();
+//                        }
+                        synchronized (allReplyLock){
+                            try {
+                                allReplyLock.wait();
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+
+                            Log.i(TAG, "Got all replies.");
+                            MatrixCursor matrixCursor = new MatrixCursor(new String[]{"key","value"});
+                            for(Map.Entry<String ,String > entry : resultAll.entrySet()){
+                                matrixCursor.addRow(new Object[]{entry.getKey(),entry.getValue()});
+                                Log.i(TAG,entry.getKey()+" "+entry.getValue());
+                            }
+                            cursor = matrixCursor;
+                            cursor.moveToFirst();
+
+                            // Now read resultALL, create a cursor and return it.
+                        }
+
+                    }
+//                    else{
+//                        cursor = db.rawQuery("SELECT * FROM mytable",null);
+//                    }
 
                 }
 
@@ -308,8 +431,9 @@ public class SimpleDhtProvider extends ContentProvider {
                 // If it's in you, retrieve it, or forward the query message, wait for reply and give the result.
                 // TODO
                 cursor = db.rawQuery("SELECT * FROM mytable WHERE key = ?",new String[]{selection});
-                Log.i(TAG,"Query Fired");
-                if(ownQuery==true){
+                Log.i(TAG,"Query Fired "+ selection);
+//                if(ownQuery==true)
+                {
                     Log.i(TAG,"For me");
                     // If the query was fired from your instance then only execute this code, else return the cursor as it is.
 //                    ownQuery = false;
@@ -320,32 +444,37 @@ public class SimpleDhtProvider extends ContentProvider {
                         m.setSenderPort(myPort);
                         m.setKey(selection);
                         m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
-                        try {
-                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        } catch (ExecutionException e) {
-                            e.printStackTrace();
+//                        try
+                        {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
                         }
+//                        catch (InterruptedException e) {
+//                            e.printStackTrace();
+//                        } catch (ExecutionException e) {
+//                            e.printStackTrace();
+//                        }
 
                         synchronized(oneReplyLock){
                             try {
+                                Log.i(TAG,"Waiting for lock release.");
                                 oneReplyLock.wait();
+                                Log.i(TAG, "Lock released");
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
                             }
                         }
                         String value = result.get(selection);
                         String key = selection;
+                        Log.i(TAG,key +" "+value);
                         MatrixCursor matrixCursor = new MatrixCursor(new String[]{"key","value"});
                         matrixCursor.addRow(new Object[]{key,value});
                         cursor = matrixCursor;
                     }
                     Log.v("query", selection);
                 }
-                else{
-                    Log.i(TAG,"For Sm1 Else");
-                }
+//                else{
+//                    Log.i(TAG,"For Sm1 Else");
+//                }
 
         }
 
@@ -554,8 +683,8 @@ public class SimpleDhtProvider extends ContentProvider {
                     break;
                 case GET_ONE:
                     Log.i(TAG, "GET_ONE msg received.");
-                    ownQuery = false;
-                    Cursor cursor = query(mUri, null, m.getKey(), null, null);
+//                    ownQuery = false;
+                    Cursor cursor = db.rawQuery("SELECT * FROM mytable where key = ?", new String[]{m.getKey()});
                     if(cursor!=null && cursor.getCount()>0){
                         // Then send the result to the original requester
                         cursor.moveToFirst();
@@ -568,16 +697,28 @@ public class SimpleDhtProvider extends ContentProvider {
                         msg.setResult(result);
                         msg.setRemotePort(m.getSenderPort());
                         msg.setSenderPort(myPort);
-                        Log.i(TAG, "Found GET_ONE result in my DB. Sending Back!");
-                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, null);
+                        Log.i(TAG, "Found GET_ONE result in my DB. Sending Back! "+m.getKey() +" "+value);
+                        try {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, null).get();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } catch (ExecutionException e) {
+                            e.printStackTrace();
+                        }
                     }
                     else{
                         // else forward it to your successor
-                        Log.i(TAG, "Didn't find the result.. Forwarding..");
+                        Log.i(TAG, "Didn't find the result.. Forwarding.."+m.getKey());
                         m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
-                        new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null);
+                        try {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } catch (ExecutionException e) {
+                            e.printStackTrace();
+                        }
                     }
-                    ownQuery = true;
+//                    ownQuery = true;
                     break;
                 case REPLY_ONE:
                     // If you receive this type of message, then you must have asked for it.
@@ -586,6 +727,80 @@ public class SimpleDhtProvider extends ContentProvider {
                         result = m.getResult();
                         Log.i(TAG, "Got Reply from "+ m.getSenderPort());
                         oneReplyLock.notify();
+                        Log.i(TAG,"Lock notified");
+                    }
+                    break;
+                case GET_ALL:
+//                    ownQueryAll = false;
+                    if(m.getRemotePort().equals(m.getSenderPort())){
+
+                        synchronized (allReplyLock){
+                            Log.i(TAG, "* query circle is finished. Releasing the lock.");
+                            resultAll = m.getResult();
+                            allReplyLock.notify();
+                        }
+                    }
+                    else{
+                        // Get own Replies and fill it
+                        Log.i(TAG,"executing * in my app");
+                        Cursor cursor1 = db.rawQuery("SELECT * FROM mytable",null);
+                        HashMap<String , String > result = m.getResult();
+                        if(cursor1!=null && cursor1.getCount()>0){
+                            cursor1.moveToFirst();
+                            for (int i = 0; i<cursor1.getCount(); i++){
+                                result.put(cursor1.getString(0), cursor1.getString(1));
+                                cursor1.moveToNext();
+                            }
+
+                        }
+                        m.setResult(result);
+                        m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                        Log.i(TAG,"Finished. Now forwarding to the successor. "+m.getRemotePort());
+                        try {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } catch (ExecutionException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    break;
+                case DELETE_ONE:
+                    Log.i(TAG,"DELETE_ONE RECEIVED");
+                    // Technically there shouldn't be an infinte loop in this anyways. Because the node which has the key will not forward it.
+                    Cursor cursor1 = db.rawQuery("SELECT * from mytable where key = ?",new String[]{m.getKey()});
+                    if(cursor1!=null && cursor1.getCount()>0){
+                        Log.i(TAG, "Found it. Deleting it..");
+                        db.rawQuery("DELETE from mytable where key=?",new String[]{m.getKey()});
+                        Log.i(TAG,"Deleted");
+                    }
+                    else{
+                        // Forward it to the successor
+                        m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                        try {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } catch (ExecutionException e) {
+                            e.printStackTrace();
+                        }
+                    }
+
+                    break;
+                case DELETE_ALL:
+                    if(m.getRemotePort().equals(m.getSenderPort())){
+                        Log.i(TAG, "Loop Complete. All db must have been deleted.");
+                    }
+                    else{
+                        db.execSQL("DELETE from mytable");
+                        m.setRemotePort(Integer.toString(Integer.parseInt(hashMap.get(successor))*2));
+                        try {
+                            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, m, null).get();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } catch (ExecutionException e) {
+                            e.printStackTrace();
+                        }
                     }
                     break;
 
